@@ -166,8 +166,8 @@ public class RNPushNotificationHelper {
     }
 
     public void sendNotificationWithImage(Bundle bundle, Bitmap image, Bitmap largeIconImage) {
-      Log.d(TAG, "sendNotificationWithImage: bitmao log: "+image);
-      Log.d(TAG, "sendNotificationWithImage: bitmao log: "+largeIconImage);
+      Log.d(LOG_TAG, "sendNotificationWithImage: bitmao log: "+image);
+      Log.d(LOG_TAG, "sendNotificationWithImage: bitmao log: "+largeIconImage);
         try {
             Class intentClass = getMainActivityClass();
             if (intentClass == null) {
