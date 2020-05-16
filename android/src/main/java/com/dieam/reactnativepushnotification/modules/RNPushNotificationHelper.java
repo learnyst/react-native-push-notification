@@ -1,8 +1,6 @@
 package com.dieam.reactnativepushnotification.modules;
 
 
-import android.app.ActivityManager;
-import android.app.ActivityManager.RunningAppProcessInfo;
 import android.app.AlarmManager;
 import android.app.Application;
 import android.app.Notification;
@@ -17,20 +15,29 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
-import android.media.AudioAttributes;
 import android.media.RingtoneManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.service.notification.StatusBarNotification;
-import android.util.Log;
 import androidx.core.app.NotificationCompat;
+import android.util.Log;
 
-import com.facebook.react.bridge.Arguments;
-import com.facebook.react.bridge.ReadableArray;
+import android.support.annotation.Nullable;
+
+import com.facebook.common.executors.CallerThreadExecutor;
+import com.facebook.common.references.CloseableReference;
+import com.facebook.datasource.DataSource;
+import com.facebook.drawee.backends.pipeline.Fresco;
+import com.facebook.imagepipeline.common.Priority;
+import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.core.ImagePipeline;
+import com.facebook.imagepipeline.core.ImagePipelineConfig;
+import com.facebook.imagepipeline.datasource.BaseBitmapDataSubscriber;
+import com.facebook.imagepipeline.image.CloseableImage;
+import com.facebook.imagepipeline.request.ImageRequest;
+import com.facebook.imagepipeline.request.ImageRequestBuilder;
+
 import com.facebook.react.bridge.ReadableMap;
-import com.facebook.react.bridge.WritableArray;
-import com.facebook.react.bridge.WritableMap;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -39,8 +46,6 @@ import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.GregorianCalendar;
-import java.util.List;
-import java.util.Set;
 
 import static com.dieam.reactnativepushnotification.modules.RNPushNotification.LOG_TAG;
 import static com.dieam.reactnativepushnotification.modules.RNPushNotificationAttributes.fromJson;
@@ -56,6 +61,8 @@ public class RNPushNotificationHelper {
     private static final int ONE_MINUTE = 60 * 1000;
     private static final long ONE_HOUR = 60 * ONE_MINUTE;
     private static final long ONE_DAY = 24 * ONE_HOUR;
+
+    private String TAG = "RNPushNotificationHelper";
 
     public RNPushNotificationHelper(Application context) {
         this.context = context;
@@ -150,7 +157,8 @@ public class RNPushNotificationHelper {
         }
     }
 
-    public void sendToNotificationCentre(Bundle bundle) {
+    public void sendNotificationWithImage(Bundle bundle, Bitmap image) {
+        Log.d(TAG, "sendNotificationWithImage: bitmao log: "+image);
         try {
             Class intentClass = getMainActivityClass();
             if (intentClass == null) {
@@ -172,9 +180,7 @@ public class RNPushNotificationHelper {
 
             Resources res = context.getResources();
             String packageName = context.getPackageName();
-
-            String channel_id = NOTIFICATION_CHANNEL_ID;
-
+            String message = bundle.getString("message");
             String title = bundle.getString("title");
             if (title == null) {
                 ApplicationInfo appInfo = context.getApplicationInfo();
@@ -206,39 +212,6 @@ public class RNPushNotificationHelper {
                 }
             }
 
-            int importance = NotificationManager.IMPORTANCE_HIGH;
-            final String importanceString = bundle.getString("importance");	
-
-            if (importanceString != null) {	
-                switch(importanceString.toLowerCase()) {	
-                    case "default":	
-                        importance = NotificationManager.IMPORTANCE_DEFAULT;	
-                        break;	
-                    case "max":	
-                        importance = NotificationManager.IMPORTANCE_MAX;	
-                        break;	
-                    case "high":	
-                        importance = NotificationManager.IMPORTANCE_HIGH;	
-                        break;	
-                    case "low":	
-                        importance = NotificationManager.IMPORTANCE_LOW;	
-                        break;	
-                    case "min":	
-                        importance = NotificationManager.IMPORTANCE_MIN;	
-                        break;	
-                    case "none":	
-                        importance = NotificationManager.IMPORTANCE_NONE;	
-                        break;	
-                    case "unspecified":	
-                        importance = NotificationManager.IMPORTANCE_UNSPECIFIED;	
-                        break;	
-                    default:	
-                        importance = NotificationManager.IMPORTANCE_HIGH;	
-                }	
-            }	
-
-            channel_id = channel_id + "-" + importance;
-
             int visibility = NotificationCompat.VISIBILITY_PRIVATE;
             final String visibilityString = bundle.getString("visibility");
 
@@ -258,20 +231,14 @@ public class RNPushNotificationHelper {
                 }
             }
 
-            NotificationCompat.Builder notification = new NotificationCompat.Builder(context, channel_id)
+            NotificationCompat.Builder notification = new NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
                     .setContentTitle(title)
                     .setTicker(bundle.getString("ticker"))
                     .setVisibility(visibility)
                     .setPriority(priority)
                     .setAutoCancel(bundle.getBoolean("autoCancel", true));
-            
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { // API 26 and higher
-                // Changing Default mode of notification
-                notification.setDefaults(Notification.DEFAULT_LIGHTS);
-            }
-      
-            String group = bundle.getString("group");
 
+            String group = bundle.getString("group");
             if (group != null) {
                 notification.setGroup(group);
             }
@@ -329,20 +296,26 @@ public class RNPushNotificationHelper {
                 bigText = bundle.getString("message");
             }
 
-            notification.setStyle(new NotificationCompat.BigTextStyle().bigText(bigText));
+            if (image != null) {
+                notification.setStyle(
+                        new NotificationCompat.BigPictureStyle()
+                                .bigPicture(image)
+                                .setBigContentTitle(title)
+                                .setSummaryText(message)
+                );
+            } else {
+                notification.setContentText(message);
+                notification.setStyle(new NotificationCompat.BigTextStyle().bigText(bigText));
+            }
 
             Intent intent = new Intent(context, intentClass);
             intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
             bundle.putBoolean("userInteraction", true);
             intent.putExtra("notification", bundle);
 
-            Uri soundUri = null;
-
             if (!bundle.containsKey("playSound") || bundle.getBoolean("playSound")) {
-                soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
-                
+                Uri soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION);
                 String soundName = bundle.getString("soundName");
-                
                 if (soundName != null) {
                     if (!"default".equalsIgnoreCase(soundName)) {
 
@@ -359,18 +332,9 @@ public class RNPushNotificationHelper {
                         }
 
                         soundUri = Uri.parse("android.resource://" + context.getPackageName() + "/" + resId);
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { // API 26 and higher
-                            channel_id = channel_id + "-" + soundName;
-                        }
                     }
                 }
-
                 notification.setSound(soundUri);
-            }
-
-            if (soundUri == null || Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                notification.setSound(null);
             }
 
             if (bundle.containsKey("ongoing") || bundle.getBoolean("ongoing")) {
@@ -395,25 +359,16 @@ public class RNPushNotificationHelper {
                     PendingIntent.FLAG_UPDATE_CURRENT);
 
             NotificationManager notificationManager = notificationManager();
+            checkOrCreateChannel(notificationManager);
 
-            long[] vibratePattern = new long[]{0};
+            notification.setContentIntent(pendingIntent);
 
             if (!bundle.containsKey("vibrate") || bundle.getBoolean("vibrate")) {
                 long vibration = bundle.containsKey("vibration") ? (long) bundle.getDouble("vibration") : DEFAULT_VIBRATION;
                 if (vibration == 0)
                     vibration = DEFAULT_VIBRATION;
-                
-                channel_id = channel_id + "-" + vibration;
-
-                vibratePattern = new long[]{0, vibration};
-
-                notification.setVibrate(vibratePattern);
+                notification.setVibrate(new long[]{0, vibration});
             }
-
-            checkOrCreateChannel(notificationManager, channel_id, soundUri, importance, vibratePattern);
-
-            notification.setChannelId(channel_id);
-            notification.setContentIntent(pendingIntent);
 
             JSONArray actionsArray = null;
             try {
@@ -465,16 +420,14 @@ public class RNPushNotificationHelper {
                 commit(editor);
             }
 
-            if (!(this.isApplicationInForeground(context) && bundle.getBoolean("ignoreInForeground"))) {
-                Notification info = notification.build();
-                info.defaults |= Notification.DEFAULT_LIGHTS;
-                
-                if (bundle.containsKey("tag")) {
-                    String tag = bundle.getString("tag");
-                    notificationManager.notify(tag, notificationID, info);
-                } else {
-                    notificationManager.notify(notificationID, info);
-                }
+            Notification info = notification.build();
+            info.defaults |= Notification.DEFAULT_LIGHTS;
+
+            if (bundle.containsKey("tag")) {
+                String tag = bundle.getString("tag");
+                notificationManager.notify(tag, notificationID, info);
+            } else {
+                notificationManager.notify(notificationID, info);
             }
 
             // Can't use setRepeating for recurring notifications because setRepeating
@@ -485,6 +438,42 @@ public class RNPushNotificationHelper {
         } catch (Exception e) {
             Log.e(LOG_TAG, "failed to send push notification", e);
         }
+    }
+
+    public void sendToNotificationCentre(final Bundle bundle) {
+        Log.d(TAG, "sendToNotificationCentre: bundle: "+bundle.toString());
+        String imageUrl = bundle.getString("imageUrl");
+
+        if (imageUrl == null) {
+            sendNotificationWithImage(bundle, null);
+            return;
+        }
+
+        ImagePipeline imagePipeline = Fresco.getImagePipeline();
+
+        ImageRequest imageRequest = ImageRequestBuilder
+                .newBuilderWithSource(Uri.parse(imageUrl))
+                .setRequestPriority(Priority.HIGH)
+                .setLowestPermittedRequestLevel(ImageRequest.RequestLevel.FULL_FETCH)
+                .build();
+        DataSource<CloseableReference<CloseableImage>> dataSource =
+                imagePipeline.fetchDecodedImage(imageRequest, context);
+
+        dataSource.subscribe(new BaseBitmapDataSubscriber() {
+            @Override
+            public void onNewResultImpl(@Nullable Bitmap bitmap) {
+                if (bitmap == null) {
+                    sendNotificationWithImage(bundle, null);
+                    return;
+                }
+                sendNotificationWithImage(bundle, bitmap);
+            }
+
+            @Override
+            public void onFailureImpl(DataSource dataSource) {
+                sendNotificationWithImage(bundle, null);
+            }
+        }, CallerThreadExecutor.getInstance());
     }
 
     private void scheduleNextNotificationIfRepeating(Bundle bundle) {
@@ -572,40 +561,6 @@ public class RNPushNotificationHelper {
         notificationManager.cancel(notificationID);
     }
 
-    public void clearDeliveredNotifications(ReadableArray identifiers) {
-      NotificationManager notificationManager = notificationManager();
-      for (int index = 0; index < identifiers.size(); index++) {
-        String id = identifiers.getString(index);
-        Log.i(LOG_TAG, "Removing notification with id " + id);
-        notificationManager.cancel(Integer.parseInt(id));
-      }
-    }
-
-    public WritableArray getDeliveredNotifications() {
-      NotificationManager notificationManager = notificationManager();
-      StatusBarNotification delivered[] = notificationManager.getActiveNotifications();
-      Log.i(LOG_TAG, "Found " + delivered.length + " delivered notifications");
-      WritableArray result = Arguments.createArray();
-      /*
-        * stay consistent to the return structure in
-        * https://facebook.github.io/react-native/docs/pushnotificationios.html#getdeliverednotifications
-        * but there is no such thing as a 'userInfo'
-        */
-      for (StatusBarNotification notification : delivered) {
-        Notification original = notification.getNotification();
-        Bundle extras = original.extras;
-        WritableMap notif = Arguments.createMap();
-        notif.putString("identifier", "" + notification.getId());
-        notif.putString("title", extras.getString(Notification.EXTRA_TITLE));
-        notif.putString("body", extras.getString(Notification.EXTRA_TEXT));
-        notif.putString("tag", notification.getTag());
-        notif.putString("group", original.getGroup());
-        result.pushMap(notif);
-      }
-
-      return result;
-
-    }
     public void cancelAllScheduledNotifications() {
         Log.i(LOG_TAG, "Cancelling all notifications");
 
@@ -665,60 +620,55 @@ public class RNPushNotificationHelper {
         }
     }
 
-    public void checkOrCreateDefaultChannel() {
-      NotificationManager manager = notificationManager();
-
-      int importance = NotificationManager.IMPORTANCE_HIGH;
-
-      String channel_id = NOTIFICATION_CHANNEL_ID + "-" + importance + "-" + DEFAULT_VIBRATION;
-
-      checkOrCreateChannel(manager, channel_id, null, importance, new long[] {0, DEFAULT_VIBRATION});
-    }
-
-    private void checkOrCreateChannel(NotificationManager manager, String channel_id, Uri soundUri, int importance, long[] vibratePattern) {
+    private static boolean channelCreated = false;
+    private void checkOrCreateChannel(NotificationManager manager) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O)
+            return;
+        if (channelCreated)
             return;
         if (manager == null)
             return;
 
-        NotificationChannel channel = manager.getNotificationChannel(channel_id);
+        Bundle bundle = new Bundle();
 
-        if (channel == null) {
-            channel = new NotificationChannel(channel_id, this.config.getChannelName() != null ? this.config.getChannelName() : "rn-push-notification-channel", importance);
+        int importance = NotificationManager.IMPORTANCE_HIGH;
+        final String importanceString = bundle.getString("importance");
 
-            channel.setDescription(this.config.getChannelDescription());
-            channel.enableLights(true);
-            channel.enableVibration(true);
-            channel.setVibrationPattern(vibratePattern);
-
-            if (soundUri != null) {
-                AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .build();
-
-                channel.setSound(soundUri, audioAttributes);
-            } else {
-                channel.setSound(null, null);
-            }
-
-            manager.createNotificationChannel(channel);
-        }
-    }
-    
-    private boolean isApplicationInForeground(Context context) {
-        ActivityManager activityManager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        List<RunningAppProcessInfo> processInfos = activityManager.getRunningAppProcesses();
-        if (processInfos != null) {
-            for (RunningAppProcessInfo processInfo : processInfos) {
-                if (processInfo.processName.equals(context.getPackageName())
-                    && processInfo.importance == RunningAppProcessInfo.IMPORTANCE_FOREGROUND
-                    && processInfo.pkgList.length > 0) {
-                    return true;
-                }
+        if (importanceString != null) {
+            switch(importanceString.toLowerCase()) {
+                case "default":
+                    importance = NotificationManager.IMPORTANCE_DEFAULT;
+                    break;
+                case "max":
+                    importance = NotificationManager.IMPORTANCE_MAX;
+                    break;
+                case "high":
+                    importance = NotificationManager.IMPORTANCE_HIGH;
+                    break;
+                case "low":
+                    importance = NotificationManager.IMPORTANCE_LOW;
+                    break;
+                case "min":
+                    importance = NotificationManager.IMPORTANCE_MIN;
+                    break;
+                case "none":
+                    importance = NotificationManager.IMPORTANCE_NONE;
+                    break;
+                case "unspecified":
+                    importance = NotificationManager.IMPORTANCE_UNSPECIFIED;
+                    break;
+                default:
+                    importance = NotificationManager.IMPORTANCE_HIGH;
             }
         }
-        return false;
-    }
 
+        NotificationChannel channel = new NotificationChannel(NOTIFICATION_CHANNEL_ID, this.config.getChannelName() != null ? this.config.getChannelName() : "rn-push-notification-channel", importance);
+
+        channel.setDescription(this.config.getChannelDescription());
+        channel.enableLights(true);
+        channel.enableVibration(true);
+
+        manager.createNotificationChannel(channel);
+        channelCreated = true;
+    }
 }
